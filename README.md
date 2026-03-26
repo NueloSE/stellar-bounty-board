@@ -35,6 +35,24 @@ Contract (`contracts`)
 - Soroban Rust contract scaffold
 - Escrow-style bounty lifecycle methods
 
+<<<<<<< HEAD
+=======
+
+
+>>>>>>> 631432f (feat(worker): add Soroban contract event indexer worker, normalization, and docs (#26))
+## Deployment Guide
+
+See [docs/deployment.md](docs/deployment.md) for step-by-step instructions to deploy the backend on Render and the frontend on Vercel, including required environment variables, health check paths, and troubleshooting tips.
+
+For detailed architecture diagrams and data flow documentation, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+<<<<<<< HEAD
+=======
+## Contract Event Indexer Worker
+
+The backend includes an isolated worker for indexing Soroban contract events. See [backend/worker/README.md](backend/worker/README.md) for details on running and extending the indexer.
+
+>>>>>>> 631432f (feat(worker): add Soroban contract event indexer worker, normalization, and docs (#26))
 ## API Overview
 
 Base URL:
@@ -67,6 +85,28 @@ Build:
 
 ```bash
 npm run build
+```
+
+## Testing
+
+Backend tests cover the JSON-backed bounty lifecycle (create, reserve, submit, release, refund, expiration) and the main HTTP routes. They use a temporary store file via `BOUNTY_STORE_PATH` and disable strict rate limiting when `NODE_ENV=test`.
+
+From the repository root (after `npm run install:all`):
+
+```bash
+npm test
+```
+
+Watch mode during development:
+
+```bash
+npm run test:watch
+```
+
+Coverage report (Istanbul via Vitest):
+
+```bash
+npm run test:coverage
 ```
 
 ## Contract Notes
