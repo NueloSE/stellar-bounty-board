@@ -5,7 +5,9 @@ import {
   FolderGit2,
   HandCoins,
   Rocket,
+  Search,
   ShieldCheck,
+  SlidersHorizontal,
 } from "lucide-react";
 import {
   createBounty,
@@ -16,7 +18,7 @@ import {
   reserveBounty,
   submitBounty,
 } from "./api";
-import { Bounty, CreateBountyPayload, OpenIssue } from "./types";
+import { Bounty, BountyStatus, CreateBountyPayload, OpenIssue } from "./types";
 import SkeletonBountyCard from "./SkeletonBountyCard";
 
 const initialForm: CreateBountyPayload = {
@@ -30,6 +32,16 @@ const initialForm: CreateBountyPayload = {
   deadlineDays: 14,
   labels: ["help wanted"],
 };
+
+const statusOptions: Array<{ value: "all" | BountyStatus; label: string }> = [
+  { value: "all", label: "All statuses" },
+  { value: "open", label: "Open" },
+  { value: "reserved", label: "Reserved" },
+  { value: "submitted", label: "Submitted" },
+  { value: "released", label: "Released" },
+  { value: "refunded", label: "Refunded" },
+  { value: "expired", label: "Expired" },
+];
 
 function formatRelativeDeadline(deadlineAt: number): string {
   const now = Math.floor(Date.now() / 1000);
@@ -52,6 +64,10 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState<"all" | BountyStatus>("all");
+  const [minReward, setMinReward] = useState("");
+  const [maxReward, setMaxReward] = useState("");
 
   async function refresh(): Promise<void> {
     const [bountyData, issueData] = await Promise.all([listBounties(), listOpenIssues()]);
@@ -98,6 +114,64 @@ function App() {
       shippedRewards: bounties.filter((bounty) => bounty.status === "released").length,
     };
   }, [bounties]);
+
+  const rewardBounds = useMemo(() => {
+    if (bounties.length === 0) {
+      return { lowest: 0, highest: 0 };
+    }
+
+    return {
+      lowest: Math.min(...bounties.map((bounty) => bounty.amount)),
+      highest: Math.max(...bounties.map((bounty) => bounty.amount)),
+    };
+  }, [bounties]);
+
+  const normalizedSearch = searchQuery.trim().toLowerCase();
+  const parsedMinReward = minReward === "" ? null : Number(minReward);
+  const parsedMaxReward = maxReward === "" ? null : Number(maxReward);
+
+  const effectiveMinReward =
+    parsedMinReward !== null && Number.isFinite(parsedMinReward) ? parsedMinReward : null;
+  const effectiveMaxReward =
+    parsedMaxReward !== null && Number.isFinite(parsedMaxReward) ? parsedMaxReward : null;
+
+  const filteredBounties = useMemo(() => {
+    return bounties.filter((bounty) => {
+      const matchesSearch =
+        normalizedSearch.length === 0 ||
+        [
+          bounty.title,
+          bounty.summary,
+          bounty.repo,
+          bounty.status,
+          bounty.issueNumber.toString(),
+          bounty.tokenSymbol,
+          ...bounty.labels,
+        ].some((value) => value.toLowerCase().includes(normalizedSearch));
+
+      const matchesStatus = statusFilter === "all" || bounty.status === statusFilter;
+      const matchesMinReward = effectiveMinReward === null || bounty.amount >= effectiveMinReward;
+      const matchesMaxReward = effectiveMaxReward === null || bounty.amount <= effectiveMaxReward;
+
+      return matchesSearch && matchesStatus && matchesMinReward && matchesMaxReward;
+    });
+  }, [
+    bounties,
+    effectiveMaxReward,
+    effectiveMinReward,
+    normalizedSearch,
+    statusFilter,
+  ]);
+
+  const activeRewardLabel = useMemo(() => {
+    if (effectiveMinReward === null && effectiveMaxReward === null) {
+      return `Any reward (${rewardBounds.lowest}–${rewardBounds.highest} XLM available)`;
+    }
+
+    const lower = effectiveMinReward ?? rewardBounds.lowest;
+    const upper = effectiveMaxReward ?? rewardBounds.highest;
+    return `${lower}–${upper} XLM`;
+  }, [effectiveMaxReward, effectiveMinReward, rewardBounds.highest, rewardBounds.lowest]);
 
   async function handleCreate(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -170,6 +244,13 @@ function App() {
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to refund bounty.");
     }
+  }
+
+  function clearFilters() {
+    setSearchQuery("");
+    setStatusFilter("all");
+    setMinReward("");
+    setMaxReward("");
   }
 
   return (
@@ -360,15 +441,92 @@ function App() {
             <HandCoins size={18} />
           </div>
 
+          <div className="board-filters">
+            <div className="board-filters__header">
+              <div>
+                <span className="panel-kicker">Board filters</span>
+                <p>
+                  Showing <strong>{filteredBounties.length}</strong> of <strong>{bounties.length}</strong>{" "}
+                  bounties
+                </p>
+              </div>
+              <button className="ghost-button filter-reset" type="button" onClick={clearFilters}>
+                Clear filters
+              </button>
+            </div>
+
+            <div className="filter-grid">
+              <label className="filter-field filter-field--search">
+                <span>Search</span>
+                <div className="input-with-icon">
+                  <Search size={16} />
+                  <input
+                    value={searchQuery}
+                    onChange={(event) => setSearchQuery(event.target.value)}
+                    placeholder="Search repo, title, labels, status"
+                  />
+                </div>
+              </label>
+
+              <label className="filter-field">
+                <span>Status</span>
+                <div className="input-with-icon">
+                  <SlidersHorizontal size={16} />
+                  <select
+                    value={statusFilter}
+                    onChange={(event) => setStatusFilter(event.target.value as "all" | BountyStatus)}
+                  >
+                    {statusOptions.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </label>
+
+              <label className="filter-field">
+                <span>Min reward</span>
+                <input
+                  type="number"
+                  min="0"
+                  step="1"
+                  inputMode="numeric"
+                  value={minReward}
+                  onChange={(event) => setMinReward(event.target.value)}
+                  placeholder={rewardBounds.lowest > 0 ? `${rewardBounds.lowest}` : "0"}
+                />
+              </label>
+
+              <label className="filter-field">
+                <span>Max reward</span>
+                <input
+                  type="number"
+                  min="0"
+                  step="1"
+                  inputMode="numeric"
+                  value={maxReward}
+                  onChange={(event) => setMaxReward(event.target.value)}
+                  placeholder={rewardBounds.highest > 0 ? `${rewardBounds.highest}` : "No limit"}
+                />
+              </label>
+            </div>
+
+            <div className="active-range" aria-live="polite">
+              <span className="active-range__label">Active reward range</span>
+              <strong>{activeRewardLabel}</strong>
+            </div>
+          </div>
+
           {loading ? (
             <div className="board-list">
               {Array.from({ length: 3 }).map((_, i) => (
                 <SkeletonBountyCard key={i} />
               ))}
             </div>
-          ) : (
+          ) : filteredBounties.length > 0 ? (
             <div className="board-list">
-              {bounties.map((bounty) => (
+              {filteredBounties.map((bounty) => (
                 <article className="bounty-card" key={bounty.id}>
                   <div className="bounty-card__top">
                     <div>
@@ -444,6 +602,10 @@ function App() {
                 </article>
               ))}
             </div>
+          ) : (
+            <div className="empty-state">
+              No bounties match the current search, status, and reward range filters.
+            </div>
           )}
         </section>
       </main>
@@ -482,4 +644,3 @@ function App() {
 }
 
 export default App;
-
