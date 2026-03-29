@@ -10,35 +10,7 @@ export type BountyStatus =
   | "refunded"
   | "expired";
 
-export type BountyTransitionType = "reserve" | "submit" | "release" | "refund" | "expire";
 
-type AuditMetadataValue = string | number | boolean | null;
-
-export interface BountyAuditLogRecord {
-  id: string;
-  bountyId: string;
-  fromStatus: BountyStatus;
-  toStatus: BountyStatus;
-  transition: BountyTransitionType;
-  actor: string;
-  timestamp: number;
-  metadata?: Record<string, AuditMetadataValue>;
-}
-
-export interface ListBountyAuditLogOptions {
-  limit?: number;
-  offset?: number;
-}
-
-export interface BountyAuditLogPage {
-  data: BountyAuditLogRecord[];
-  pagination: {
-    limit: number;
-    offset: number;
-    total: number;
-    hasMore: boolean;
-    nextOffset: number | null;
-  };
 }
 
 export interface BountyRecord {
@@ -63,6 +35,12 @@ export interface BountyRecord {
   refundedTxHash?: string;
   submissionUrl?: string;
   notes?: string;
+  // Race condition prevention
+  version: number;
+  // Event history
+  events: BountyEvent[];
+  // Reservation timeout (in seconds from reservation)
+  reservationTimeoutSeconds?: number;
 }
 
 export interface CreateBountyInput {
@@ -75,6 +53,7 @@ export interface CreateBountyInput {
   amount: number;
   deadlineDays: number;
   labels: string[];
+  reservationTimeoutSeconds?: number;
 }
 
 interface CreateAuditLogInput {
@@ -120,6 +99,12 @@ const sampleBounties: BountyRecord[] = [
     createdAt: 1710000000,
     deadlineAt: 1910000000,
     reservedAt: 1710003600,
+    version: 1,
+    events: [
+      { type: "created", timestamp: 1710000000 },
+      { type: "reserved", timestamp: 1710003600, actor: "GBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB" },
+    ],
+    reservationTimeoutSeconds: 604800,
   },
   {
     id: "BNT-0002",
@@ -135,6 +120,9 @@ const sampleBounties: BountyRecord[] = [
     status: "open",
     createdAt: 1710500000,
     deadlineAt: 1910500000,
+    version: 1,
+    events: [{ type: "created", timestamp: 1710500000 }],
+    reservationTimeoutSeconds: 604800,
   },
 ];
 
@@ -245,6 +233,10 @@ function normalizeRecords(records: BountyRecord[]): BountyRecord[] {
   const auditEntries: CreateAuditLogInput[] = [];
 
   const next = records.map((record) => {
+    // Ensure events array exists (for backward compatibility)
+    const events = record.events || [{ type: "created" as const, timestamp: record.createdAt }];
+
+    // Check for expired deadline
     if ((record.status === "open" || record.status === "reserved") && now > record.deadlineAt) {
       changed = true;
       auditEntries.push({
@@ -262,8 +254,44 @@ function normalizeRecords(records: BountyRecord[]): BountyRecord[] {
       return {
         ...record,
         status: "expired" as const,
+        events: [
+          ...events,
+          { type: "expired", timestamp: now },
+        ],
       };
     }
+
+    // Check for expired reservation (timeout without submission)
+    if (
+      record.status === "reserved" &&
+      record.reservedAt &&
+      record.reservationTimeoutSeconds &&
+      now > record.reservedAt + record.reservationTimeoutSeconds
+    ) {
+      changed = true;
+      return {
+        ...record,
+        status: "open" as const,
+        contributor: undefined,
+        reservedAt: undefined,
+        events: [
+          ...events,
+          { type: "expired", timestamp: now, details: { reason: "reservation_timeout" } },
+        ],
+      };
+    }
+
+    // Ensure version and events exist for backward compatibility
+    if (!record.version || !record.events) {
+      changed = true;
+      return {
+        ...record,
+        version: record.version || 1,
+        events,
+        reservationTimeoutSeconds: record.reservationTimeoutSeconds || 604800,
+      };
+    }
+
     return record;
   });
 
@@ -317,6 +345,9 @@ export function createBounty(input: CreateBountyInput): BountyRecord {
     status: "open",
     createdAt,
     deadlineAt: createdAt + input.deadlineDays * 24 * 60 * 60,
+    version: 1,
+    events: [{ type: "created", timestamp: createdAt }],
+    reservationTimeoutSeconds: input.reservationTimeoutSeconds ?? 604800,
   };
 
   writeStore([bounty, ...records]);
@@ -325,7 +356,7 @@ export function createBounty(input: CreateBountyInput): BountyRecord {
   const recipients: NotificationRecipient[] = [
     { role: 'maintainer', address: input.maintainer },
   ];
-  
+
   // Non-blocking: notifications fire-and-forget
   sendNotification(recipients, 'bounty_created', {
     bountyId: bounty.id,
@@ -341,7 +372,7 @@ export function createBounty(input: CreateBountyInput): BountyRecord {
   return bounty;
 }
 
-export function reserveBounty(id: string, contributor: string): BountyRecord {
+export function reserveBounty(id: string, contributor: string, expectedVersion?: number): BountyRecord {
   const records = listBounties();
   const bounty = findBounty(records, id);
 
@@ -349,11 +380,22 @@ export function reserveBounty(id: string, contributor: string): BountyRecord {
     throw new Error("Only open bounties can be reserved.");
   }
 
+  // Race condition prevention: check version if provided
+  if (expectedVersion !== undefined && bounty.version !== expectedVersion) {
+    throw new Error("Bounty was just reserved by someone else. Please refresh and try again.");
+  }
+
+  const now = nowInSeconds();
   const updated: BountyRecord = {
     ...bounty,
     contributor,
     status: "reserved",
-    reservedAt: nowInSeconds(),
+    reservedAt: now,
+    version: bounty.version + 1,
+    events: [
+      ...bounty.events,
+      { type: "reserved", timestamp: now, actor: contributor },
+    ],
   };
 
   const persisted = persistUpdated(records, updated);
@@ -385,12 +427,18 @@ export function submitBounty(
     throw new Error("Only the reserved contributor can submit this bounty.");
   }
 
+  const now = nowInSeconds();
   const updated: BountyRecord = {
     ...bounty,
     status: "submitted",
-    submittedAt: nowInSeconds(),
+    submittedAt: now,
     submissionUrl,
     notes,
+    version: bounty.version + 1,
+    events: [
+      ...bounty.events,
+      { type: "submitted", timestamp: now, actor: contributor },
+    ],
   };
 
   const persisted = persistUpdated(records, updated);
@@ -421,11 +469,17 @@ export function releaseBounty(id: string, maintainer: string, transactionHash?: 
     throw new Error("Only submitted bounties can be released.");
   }
 
+  const now = nowInSeconds();
   const updated: BountyRecord = {
     ...bounty,
     status: "released",
-    releasedAt: nowInSeconds(),
+    releasedAt: now,
     releasedTxHash: transactionHash?.trim() ? transactionHash.trim() : bounty.releasedTxHash,
+    version: bounty.version + 1,
+    events: [
+      ...bounty.events,
+      { type: "released", timestamp: now, actor: maintainer },
+    ],
   };
 
   const persisted = persistUpdated(records, updated);
@@ -458,11 +512,17 @@ export function refundBounty(id: string, maintainer: string, transactionHash?: s
     throw new Error("Submitted bounties must be reviewed before refund.");
   }
 
+  const now = nowInSeconds();
   const updated: BountyRecord = {
     ...bounty,
     status: "refunded",
-    refundedAt: nowInSeconds(),
+    refundedAt: now,
     refundedTxHash: transactionHash?.trim() ? transactionHash.trim() : bounty.refundedTxHash,
+    version: bounty.version + 1,
+    events: [
+      ...bounty.events,
+      { type: "refunded", timestamp: now, actor: maintainer },
+    ],
   };
 
   const persisted = persistUpdated(records, updated);
@@ -481,39 +541,6 @@ export function refundBounty(id: string, maintainer: string, transactionHash?: s
   return persisted;
 }
 
-export function listBountyAuditLogs(
-  id: string,
-  options: ListBountyAuditLogOptions = {},
-): BountyAuditLogPage {
-  const records = listBounties();
-  findBounty(records, id);
 
-  const limit = Number.isFinite(options.limit) ? Math.trunc(options.limit as number) : 20;
-  const offset = Number.isFinite(options.offset) ? Math.trunc(options.offset as number) : 0;
-  const safeLimit = Math.min(Math.max(limit, 1), 100);
-  const safeOffset = Math.max(offset, 0);
-
-  const all = readAuditStore()
-    .filter((entry) => entry.bountyId === id)
-    .sort((a, b) => {
-      if (a.timestamp !== b.timestamp) {
-        return a.timestamp - b.timestamp;
-      }
-      return a.id.localeCompare(b.id);
-    });
-
-  const data = all.slice(safeOffset, safeOffset + safeLimit);
-  const total = all.length;
-  const nextOffset = safeOffset + data.length < total ? safeOffset + data.length : null;
-
-  return {
-    data,
-    pagination: {
-      limit: safeLimit,
-      offset: safeOffset,
-      total,
-      hasMore: nextOffset !== null,
-      nextOffset,
-    },
   };
 }

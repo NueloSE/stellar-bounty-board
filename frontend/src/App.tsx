@@ -20,8 +20,21 @@ import {
   reserveBounty,
   submitBounty,
 } from "./api";
+import { BountyRecommendation, ContributorProfile, createDefaultProfile, generateRecommendations, updateProfileFromBounties } from "./recommendations";
+import RecommendedBounties from "./RecommendedBounties";
+import { statusCopy, actionCopy, readInitialFilters, FilterState, statusOptions, statusGlossary } from "./constants";
+import { filterBounties, getRewardBounds, getActiveRewardLabel, getContributorMetrics } from "./utils";
+import { Bounty, CreateBountyPayload, OpenIssue, BountyStatus } from "./types";
+
+import GitHubIssuePreviewCard from "./GitHubIssuePreviewCard";
+import type { Bounty, BountyStatus, CreateBountyPayload, OpenIssue } from "./types";
+import BountyDetailPage from "./BountyDetailPage";
 
 import SkeletonBountyCard from "./SkeletonBountyCard";
+import GitHubIssuePreviewCard from "./GitHubIssuePreviewCard";
+
+const STELLAR_PUBLIC_KEY_HINT = "Expected Stellar public key (starts with G and is 56 characters).";
+const STELLAR_PUBLIC_KEY_REGEX = /^G[A-Z2-7]{55}$/;
 
 const initialForm: CreateBountyPayload = {
   repo: "ritik4ever/stellar-stream",
@@ -54,8 +67,30 @@ function shortAddress(value: string): string {
 function validateStellarPublicKey(input: string): string | null {
   const value = input.trim();
   if (!value) return "Address is required.";
-  if (!STELLAR_PUBLIC_KEY_REGEX.test(value)) return STELLAR_PUBLIC_KEY_HINT;
+  if (!/^G[A-Z0-9]{55}$/.test(value)) return "Enter a Stellar public key (starts with 'G', 56 characters)";
   return null;
+}
+
+function readInitialFilters() {
+  const params = new URLSearchParams(window.location.search);
+  const rawSearch = params.get("search") ?? "";
+  const rawStatus = params.get("status") ?? "all";
+  const statusFilter: "all" | BountyStatus =
+    rawStatus === "open" ||
+    rawStatus === "reserved" ||
+    rawStatus === "submitted" ||
+    rawStatus === "released" ||
+    rawStatus === "refunded" ||
+    rawStatus === "expired"
+      ? rawStatus
+      : "all";
+
+  return {
+    searchQuery: rawSearch,
+    statusFilter,
+    minReward: params.get("minReward") ?? "",
+    maxReward: params.get("maxReward") ?? "",
+  };
 }
 
 const contributorStatuses: Array<BountyStatus | "all"> = [
@@ -67,6 +102,56 @@ const contributorStatuses: Array<BountyStatus | "all"> = [
   "expired",
 ];
 
+type BountyAction = "reserve" | "submit" | "release" | "refund";
+
+const statusCopy: Record<BountyStatus, { label: string; description: string }> = {
+  open: {
+    label: "Open",
+    description: "Maintainer-funded and ready for a contributor to reserve.",
+  },
+  reserved: {
+    label: "Reserved",
+    description: "A contributor has claimed the work and is preparing a submission.",
+  },
+  submitted: {
+    label: "Submitted",
+    description: "The contributor has shared a PR link. Maintainer can release or refund.",
+  },
+  released: {
+    label: "Released",
+    description: "Escrow has been paid out to the contributor.",
+  },
+  refunded: {
+    label: "Refunded",
+    description: "Escrow has been returned to the maintainer.",
+  },
+  expired: {
+    label: "Expired",
+    description: "Deadline passed before completion. Maintainer can refund.",
+  },
+};
+
+const actionCopy: Record<BountyStatus, Array<{ action: BountyAction; label: string; title: string }>> = {
+  open: [{ action: "reserve", label: "Reserve", title: "Claim this bounty as a contributor." }],
+  reserved: [{ action: "submit", label: "Submit", title: "Attach a pull request or demo link." }],
+  submitted: [
+    { action: "release", label: "Release", title: "Release payout after review." },
+    { action: "refund", label: "Refund", title: "Refund escrow instead of releasing." },
+  ],
+  released: [],
+  refunded: [],
+  expired: [{ action: "refund", label: "Refund", title: "Refund an expired bounty." }],
+};
+
+function repoOwner(repo: string): string {
+  return repo.split("/")[0] ?? repo;
+}
+
+function formatTimestamp(value?: number): string {
+  if (!value) return "-";
+  return new Date(value * 1000).toLocaleString();
+}
+
 function App() {
   const initialFilters = useMemo(() => readInitialFilters(), []);
   const [form, setForm] = useState<CreateBountyPayload>(initialForm);
@@ -76,6 +161,12 @@ function App() {
   const [submitting, setSubmitting] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+n
+  const [searchQuery, setSearchQuery] = useState(initialFilters.searchQuery);
+  const [statusFilter, setStatusFilter] = useState<"all" | BountyStatus>(initialFilters.statusFilter);
+  const [minReward, setMinReward] = useState(initialFilters.minReward);
+  const [maxReward, setMaxReward] = useState(initialFilters.maxReward);
+
 
 
   async function refresh(): Promise<void> {
@@ -113,6 +204,7 @@ function App() {
   }, []);
 
   useEffect(() => {
+    if (pathname.startsWith("/bounties/")) return;
     const params = new URLSearchParams();
 
     if (searchQuery.trim() !== "") {
@@ -134,10 +226,14 @@ function App() {
     const nextSearch = params.toString();
     const nextUrl = `${window.location.pathname}${nextSearch ? `?${nextSearch}` : ""}${window.location.hash}`;
     window.history.replaceState(null, "", nextUrl);
-  }, [maxReward, minReward, searchQuery, statusFilter]);
+  }, [maxReward, minReward, pathname, searchQuery, statusFilter]);
 
   useEffect(() => {
     function handlePopState() {
+      const nextPathname = window.location.pathname;
+      setPathname(nextPathname);
+
+      if (nextPathname.startsWith("/bounties/")) return;
       const filters = readInitialFilters();
       setSearchQuery(filters.searchQuery);
       setStatusFilter(filters.statusFilter);
@@ -149,17 +245,30 @@ function App() {
     return () => window.removeEventListener("popstate", handlePopState);
   }, []);
 
+  function navigate(nextPath: string) {
+    if (nextPath === window.location.pathname) return;
+    window.history.pushState(null, "", nextPath);
+    setPathname(nextPath);
+  }
+
   const metrics = useMemo(() => {
-    const activePool = bounties.filter((bounty) =>
+    const activePool = bounties.filter((bounty: Bounty) =>
       ["open", "reserved", "submitted"].includes(bounty.status),
     );
     return {
       liveBounties: activePool.length,
-      fundedVolume: bounties.reduce((sum, bounty) => sum + bounty.amount, 0),
-      openIssues: bounties.filter((bounty) => bounty.status === "open").length,
-      shippedRewards: bounties.filter((bounty) => bounty.status === "released").length,
+      fundedVolume: bounties.reduce((sum: number, bounty: Bounty) => sum + bounty.amount, 0),
+      openIssues: bounties.filter((bounty: Bounty) => bounty.status === "open").length,
+      shippedRewards: bounties.filter((bounty: Bounty) => bounty.status === "released").length,
     };
   }, [bounties]);
+
+
+    setSearchQuery("");
+    setStatusFilter("all");
+    setMinReward("");
+    setMaxReward("");
+
 
 
 
@@ -188,6 +297,70 @@ function App() {
     } finally {
       setSubmitting(false);
     }
+  }
+
+  function renderActionButton(
+    bounty: Bounty,
+    action: { action: BountyAction; label: string; title: string },
+  ): ReactNode {
+    const onClick = (event: React.MouseEvent<HTMLButtonElement>) => {
+      event.stopPropagation();
+      if (action.action === "reserve") {
+        void handleReserve(bounty);
+        return;
+      }
+      if (action.action === "submit") {
+        void handleSubmit(bounty);
+        return;
+      }
+      if (action.action === "release") {
+        void handleRelease(bounty);
+        return;
+      }
+      void handleRefund(bounty);
+    };
+
+    return (
+      <button
+        key={action.action}
+        type="button"
+        className={action.action === "refund" ? "ghost-button" : "secondary-button"}
+        title={action.title}
+        onClick={onClick}
+      >
+        {action.label}
+      </button>
+    );
+  }
+
+  const detailId = useMemo(() => {
+    const match = pathname.match(/^\/bounties\/([^/]+)$/);
+    return match ? decodeURIComponent(match[1] ?? "") : null;
+  }, [pathname]);
+
+  const detailBounty = useMemo(() => {
+    if (!detailId) return null;
+    return bounties.find((bounty) => bounty.id === detailId) ?? null;
+  }, [bounties, detailId]);
+
+  if (detailId) {
+    const bounty = detailBounty;
+    const owner = bounty ? repoOwner(bounty.repo) : "";
+    const avatarUrl = bounty ? `https://github.com/${owner}.png?size=72` : "";
+
+    return (
+      <BountyDetailPage
+        bounty={bounty}
+        loading={loading}
+        onBack={() => navigate("/")}
+        owner={owner}
+        avatarUrl={avatarUrl}
+        statusCopy={statusCopy}
+        actionCopy={actionCopy}
+        renderActionButton={renderActionButton}
+        formatTimestamp={formatTimestamp}
+      />
+    );
   }
 
   async function handleReserve(bounty: Bounty) {
@@ -265,9 +438,6 @@ function App() {
   }
 
 
-    }
-  }
-
   return (
     <div className="page-shell">
       <div className="glow glow-left" />
@@ -336,6 +506,13 @@ function App() {
       </section>
 
       {error && <div className="error-banner">{error}</div>}
+
+      {profileContributor && (
+        <RecommendedBounties 
+          recommendations={recommendations} 
+          loading={loading} 
+        />
+      )}
 
       <main className="content-grid">
         <section className="panel form-panel" id="create">
@@ -410,7 +587,7 @@ function App() {
                   autoComplete="off"
                   aria-invalid={Boolean(form.maintainer.trim() && validateStellarPublicKey(form.maintainer))}
                 />
-                <small className="field-hint">{STELLAR_PUBLIC_KEY_HINT}</small>
+                <small className="field-hint">Enter a Stellar public key (starts with 'G', 56 characters)</small>
                 {form.maintainer.trim() && validateStellarPublicKey(form.maintainer) && (
                   <small className="field-error">{validateStellarPublicKey(form.maintainer)}</small>
                 )}
@@ -583,7 +760,19 @@ function App() {
           ) : filteredBounties.length > 0 ? (
             <div className="board-list">
               {filteredBounties.map((bounty) => (
-                <article className="bounty-card" key={bounty.id}>
+                <article
+                  className="bounty-card"
+                  key={bounty.id}
+                  role="link"
+                  tabIndex={0}
+                  onClick={() => navigate(`/bounties/${encodeURIComponent(bounty.id)}`)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      navigate(`/bounties/${encodeURIComponent(bounty.id)}`);
+                    }
+                  }}
+                >
                   <div className="bounty-card__top">
                     <div>
                       <span
@@ -724,7 +913,7 @@ function App() {
               autoComplete="off"
               aria-invalid={Boolean(profileContributor.trim() && validateStellarPublicKey(profileContributor))}
             />
-            <small className="field-hint">{STELLAR_PUBLIC_KEY_HINT}</small>
+            <small className="field-hint">Enter a Stellar public key (starts with 'G', 56 characters)</small>
             {profileContributor.trim() && validateStellarPublicKey(profileContributor) && (
               <small className="field-error">{validateStellarPublicKey(profileContributor)}</small>
             )}
