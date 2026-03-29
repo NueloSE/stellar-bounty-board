@@ -12,5 +12,5 @@ High-value contribution areas:
 - GitHub App or webhook integration
 - Soroban event indexing
 - Persistent relational storage
-- CI and integration tests
+- CI and integration tests.
 
