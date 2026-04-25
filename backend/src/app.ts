@@ -1,5 +1,6 @@
 import cors from "cors";
 import express, { Request, Response } from "express";
+import { buildCorsOptions } from "./middleware/corsOptions";
 import {
   createBounty,
   listBountyAuditLogs,
@@ -30,7 +31,7 @@ import {
 
 export const app = express();
 
-app.use(cors());
+app.use(cors(buildCorsOptions()));
 
 // Parse JSON bodies; capture raw body for webhook signature verification
 app.use(
@@ -100,8 +101,9 @@ app.get("/api/health", (_req: Request, res: Response) => {
   });
 });
 
-app.get("/api/bounties", (_req: Request, res: Response) => {
-  res.json({ data: listBounties() });
+app.get("/api/bounties", (req: Request, res: Response) => {
+  const q = typeof req.query.q === "string" ? req.query.q : undefined;
+  res.json({ data: listBounties({ q }) });
 });
 
 app.get("/api/bounties/:id/audit-logs", (req: Request, res: Response) => {

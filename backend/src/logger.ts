@@ -1,39 +1,50 @@
-export type LogFields = Record<string, string | number | boolean | null | undefined>;
+import pino from "pino";
 
-const SENSITIVE_KEYS = new Set([
-  "password",
-  "secret",
-  "token",
-  "authorization",
-  "cookie",
-  "apikey",
-  "api_key",
-]);
+const isDev = process.env.NODE_ENV !== "production";
 
 /**
- * Single-line JSON logs for structured parsing. Omits undefined; never pass raw request bodies.
+ * Pino logger instance.
+ *
+ * - Development: pretty-printed, human-readable output via pino-pretty.
+ * - Production:  single-line JSON, ready for log aggregators.
+ *
+ * Sensitive fields (Authorization, cookie, password, secret, token, api_key)
+ * are redacted at the serializer level so they never appear in any log output.
  */
-export function logStructured(level: "info" | "warn" | "error", msg: string, fields: LogFields = {}): void {
-  const safe: Record<string, string | number | boolean | null> = {
-    ts: new Date().toISOString(),
-    level,
-    msg,
-  };
-  for (const [k, v] of Object.entries(fields)) {
-    if (v === undefined) continue;
-    const lower = k.toLowerCase();
-    if (SENSITIVE_KEYS.has(lower) || lower.includes("password") || lower.includes("secret")) {
-      safe[k] = "[redacted]";
-      continue;
-    }
-    safe[k] = v as string | number | boolean | null;
-  }
-  const line = JSON.stringify(safe);
-  if (level === "error") {
-    console.error(line);
-  } else if (level === "warn") {
-    console.warn(line);
-  } else {
-    console.log(line);
-  }
+export const logger = pino(
+  {
+    level: process.env.LOG_LEVEL ?? "info",
+    redact: {
+      paths: [
+        "req.headers.authorization",
+        "req.headers.cookie",
+        "*.password",
+        "*.secret",
+        "*.token",
+        "*.apiKey",
+        "*.api_key",
+        "*.Authorization",
+      ],
+      censor: "[redacted]",
+    },
+  },
+  isDev
+    ? pino.transport({
+        target: "pino-pretty",
+        options: { colorize: true, translateTime: "SYS:standard", ignore: "pid,hostname" },
+      })
+    : undefined,
+);
+
+// ── Legacy shim ─────────────────────────────────────────────────────────────
+// Keeps existing callers of `logStructured` working without changes.
+
+export type LogFields = Record<string, string | number | boolean | null | undefined>;
+
+export function logStructured(
+  level: "info" | "warn" | "error",
+  msg: string,
+  fields: LogFields = {},
+): void {
+  logger[level](fields, msg);
 }

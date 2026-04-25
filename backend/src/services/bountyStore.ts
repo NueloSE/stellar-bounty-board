@@ -343,9 +343,26 @@ function persistUpdated(records: BountyRecord[], updated: BountyRecord): BountyR
   return updated;
 }
 
-export function listBounties(): BountyRecord[] {
+export interface ListBountiesOptions {
+  /** Case-insensitive substring filter applied to title, summary, and labels. */
+  q?: string;
+}
+
+export function listBounties(options: ListBountiesOptions = {}): BountyRecord[] {
   const records = normalizeRecords(readStore());
-  return [...records].sort((a, b) => b.createdAt - a.createdAt);
+  let sorted = [...records].sort((a, b) => b.createdAt - a.createdAt);
+
+  const q = options.q?.trim().toLowerCase();
+  if (q) {
+    sorted = sorted.filter(
+      (b) =>
+        b.title.toLowerCase().includes(q) ||
+        b.summary.toLowerCase().includes(q) ||
+        b.labels.some((l) => l.toLowerCase().includes(q)),
+    );
+  }
+
+  return sorted;
 }
 
 export function createBounty(input: CreateBountyInput): BountyRecord {
