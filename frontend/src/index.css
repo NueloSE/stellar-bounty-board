@@ -1136,3 +1136,12 @@ select {
 }
 
 /* ---- End submission checklist modal ---- */
+
+/* ── Skill-tag filter row (recommendations panel, #75) ────────────────── */
+
+.tag-filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 16px;
+}
