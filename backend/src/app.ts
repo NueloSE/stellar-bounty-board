@@ -368,6 +368,6 @@ app.get("/api/metrics", (_req: Request, res: Response) => {
     const metrics = getGlobalMetrics();
     res.json({ data: metrics });
   } catch (error) {
-    sendError(res, req, error);
+    sendError(res, _req, error);
   }
 });
