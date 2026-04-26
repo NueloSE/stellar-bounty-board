@@ -1,5 +1,5 @@
-import { ReactNode } from "react";
-import { ArrowUpRight } from "lucide-react";
+import { ReactNode, useState } from "react";
+import { ArrowUpRight, Check, Copy } from "lucide-react";
 
 import type { Bounty, BountyStatus } from "./types";
 
@@ -31,6 +31,36 @@ export default function BountyDetailPage({
   renderActionButton,
   formatTimestamp,
 }: Props) {
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+
+  async function copyMetadata(value: string, key: string) {
+    await navigator.clipboard.writeText(value);
+    setCopiedKey(key);
+    window.setTimeout(() => {
+      setCopiedKey((current) => (current === key ? null : current));
+    }, 1800);
+  }
+
+  function renderCopyableValue(label: string, value: string, key: string) {
+    const copied = copiedKey === key;
+
+    return (
+      <div className="copyable-meta-value">
+        <strong>{value}</strong>
+        <button
+          type="button"
+          className="copy-meta-button"
+          aria-label={`Copy ${label}`}
+          title={`Copy ${label}`}
+          onClick={() => void copyMetadata(value, key)}
+        >
+          {copied ? <Check size={14} /> : <Copy size={14} />}
+          <span>{copied ? "Copied" : "Copy"}</span>
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div className="page-shell">
       <div className="glow glow-left" />
@@ -72,7 +102,7 @@ export default function BountyDetailPage({
             <div className="meta-grid meta-grid--detail">
               <div>
                 <span className="meta-label">Bounty ID</span>
-                <strong>{bounty.id}</strong>
+                {renderCopyableValue("bounty ID", bounty.id, "bounty-id")}
               </div>
               <div>
                 <span className="meta-label">Issue</span>
@@ -97,7 +127,7 @@ export default function BountyDetailPage({
               </div>
               <div>
                 <span className="meta-label">Maintainer</span>
-                <strong>{bounty.maintainer}</strong>
+                {renderCopyableValue("maintainer wallet address", bounty.maintainer, "maintainer")}
               </div>
               <div>
                 <span className="meta-label">Contributor</span>
