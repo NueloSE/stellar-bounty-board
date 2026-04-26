@@ -9,12 +9,14 @@ import {
   FolderGit2,
   GitBranch,
   HandCoins,
+  Moon,
   Plus,
   Rocket,
   Search,
   ShieldCheck,
   SlidersHorizontal,
   Star,
+  Sun,
   Trash2,
   Upload,
   UserRound,
@@ -45,6 +47,32 @@ import SkeletonBountyCard from "./SkeletonBountyCard";
 
 const STELLAR_PUBLIC_KEY_HINT = "Expected Stellar public key (starts with G and is 56 characters).";
 const STELLAR_PUBLIC_KEY_REGEX = /^G[A-Z2-7]{55}$/;
+
+const DARK_MODE_KEY = "stellar-bounty-board:theme";
+
+function useDarkMode() {
+  const [dark, setDark] = useState<boolean>(() => {
+    try {
+      const stored = localStorage.getItem(DARK_MODE_KEY);
+      if (stored !== null) return stored === "dark";
+    } catch {
+      // ignore
+    }
+    return window.matchMedia("(prefers-color-scheme: dark)").matches;
+  });
+
+  useEffect(() => {
+    const root = document.documentElement;
+    root.setAttribute("data-theme", dark ? "dark" : "light");
+    try {
+      localStorage.setItem(DARK_MODE_KEY, dark ? "dark" : "light");
+    } catch {
+      // ignore
+    }
+  }, [dark]);
+
+  return { dark, toggle: () => setDark((d) => !d) };
+}
 
 const initialForm: CreateBountyPayload = {
   repo: "ritik4ever/stellar-stream",
@@ -103,6 +131,7 @@ function formatTimestamp(value?: number): string {
 }
 
 function App() {
+  const { dark, toggle: toggleDark } = useDarkMode();
   const initialFilters = useMemo(() => readInitialFilters(), []);
   const [form, setForm] = useState<CreateBountyPayload>(initialForm);
   const [bounties, setBounties] = useState<Bounty[]>([]);
@@ -510,6 +539,15 @@ function App() {
       <div className="glow glow-right" />
 
       <header className="hero">
+        <button
+          type="button"
+          className="dark-mode-toggle"
+          onClick={toggleDark}
+          aria-label={dark ? "Switch to light mode" : "Switch to dark mode"}
+          title={dark ? "Switch to light mode" : "Switch to dark mode"}
+        >
+          {dark ? <Sun size={18} /> : <Moon size={18} />}
+        </button>
         <div className="hero-copy">
           <span className="eyebrow">Stellar + Open Source</span>
           <h1>Fund GitHub issues with on-chain style escrow.</h1>

@@ -16,6 +16,23 @@
   --shadow: 0 24px 80px rgba(60, 43, 17, 0.12);
 }
 
+/* ── Dark mode ─────────────────────────────────────────────────────────── */
+[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #111614;
+  --surface: rgba(24, 30, 27, 0.92);
+  --surface-strong: #1e2922;
+  --ink: #e8f0ec;
+  --muted: #8aa099;
+  --line: rgba(200, 220, 210, 0.1);
+  --mint: #34c994;
+  --mint-soft: rgba(52, 201, 148, 0.15);
+  --amber: #f4a24a;
+  --amber-soft: rgba(244, 162, 74, 0.15);
+  --rose: #e07878;
+  --shadow: 0 24px 80px rgba(0, 0, 0, 0.4);
+}
+
 * {
   box-sizing: border-box;
 }
@@ -33,6 +50,14 @@ body {
     linear-gradient(180deg, #f9f2e7 0%, #f3e9db 100%);
   color: var(--ink);
   font-family: "Space Grotesk", "Trebuchet MS", sans-serif;
+  transition: background 0.3s ease, color 0.3s ease;
+}
+
+[data-theme="dark"] body {
+  background:
+    radial-gradient(circle at top left, rgba(244, 162, 74, 0.08), transparent 28%),
+    radial-gradient(circle at 85% 10%, rgba(52, 201, 148, 0.07), transparent 24%),
+    linear-gradient(180deg, #111614 0%, #0d1512 100%);
 }
 
 a {
@@ -91,6 +116,31 @@ textarea {
   gap: 20px;
   align-items: stretch;
   margin-bottom: 24px;
+  position: relative;
+}
+
+/* ── Dark mode toggle ─────────────────────────────────────────────────── */
+.dark-mode-toggle {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface-strong);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--ink);
+  cursor: pointer;
+  padding: 6px 10px;
+  transition: background 0.2s, color 0.2s, border-color 0.2s;
+  z-index: 5;
+}
+
+.dark-mode-toggle:hover {
+  background: var(--mint-soft);
+  border-color: var(--mint);
+  color: var(--mint);
 }
 
 .hero-copy,
