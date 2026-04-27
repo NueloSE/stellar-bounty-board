@@ -61,7 +61,16 @@ export const createBountySchema = z
     amount: z.coerce
       .number()
       .positive("Amount must be greater than zero.")
-      .openapi({ example: 100, description: "Payout amount in the specified token." }),
+      .min(1, "Amount must be at least 1 XLM.")
+      .max(10000, "Amount must not exceed 10,000 XLM.")
+      .refine(
+        (val) => {
+          const decimalStr = String(val).split(".")[1];
+          return !decimalStr || decimalStr.length <= 7;
+        },
+        "Amount must have at most 7 decimal places.",
+      )
+      .openapi({ example: 100, description: "Payout amount in the specified token (1–10,000, max 7 decimals)." }),
     deadlineDays: z.coerce
       .number()
       .int()
