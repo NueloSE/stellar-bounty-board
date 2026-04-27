@@ -99,9 +99,9 @@ function BountyRecommendationCard({ recommendation }: { recommendation: BountyRe
 
       <div className="chip-row">
         {bounty.labels.map((label) => (
-          <span className="chip" key={label}>
-            {label}
-          </span>
+          <span className="chip" key={label.name}>
+  {label.name}
+</span>
         ))}
       </div>
 
