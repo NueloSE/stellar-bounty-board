@@ -32,6 +32,80 @@ fn setup_test(
     (client, maintainer, contributor, token_id.address(), fee_recipient)
 }
 
+fn create_bounty_with_state(
+    env: &Env,
+    client: &StellarBountyBoardContractClient<'static>,
+    maintainer: Address,
+    contributor: Address,
+    token_id: Address,
+    status: BountyStatus,
+) -> u64 {
+    let deadline = env.ledger().timestamp() + 1000;
+    let bounty_id = client.create_bounty(
+        &maintainer,
+        &token_id,
+        &500,
+        &String::from_str(&env, "repo"),
+        &1,
+        &String::from_str(&env, "title"),
+        &deadline,
+    );
+
+    match status {
+        BountyStatus::Open => bounty_id,
+        BountyStatus::Reserved => {
+            client.reserve_bounty(&bounty_id, &contributor);
+            bounty_id
+        }
+        BountyStatus::Submitted => {
+            client.reserve_bounty(&bounty_id, &contributor);
+            client.submit_bounty(&bounty_id, &contributor);
+            bounty_id
+        }
+        BountyStatus::Released => {
+            client.reserve_bounty(&bounty_id, &contributor);
+            client.submit_bounty(&bounty_id, &contributor);
+            client.release_bounty(&bounty_id, &maintainer);
+            bounty_id
+        }
+        BountyStatus::Refunded => {
+            client.reserve_bounty(&bounty_id, &contributor);
+            env.ledger().set_timestamp(deadline + 1);
+            client.refund_bounty(&bounty_id, &maintainer);
+            bounty_id
+        }
+        BountyStatus::Expired => {
+            env.ledger().set_timestamp(deadline + 1);
+            bounty_id
+        }
+    }
+}
+
+macro_rules! invalid_transition_test {
+    ($name:ident, $status:expr, $expected:expr, $action:block) => {
+        #[test]
+        #[should_panic(expected = $expected)]
+        fn $name() {
+            let env = Env::default();
+            env.mock_all_auths();
+            let (client, maintainer, contributor, token_id) = setup_test(&env);
+            let token_admin = soroban_sdk::token::StellarAssetClient::new(&env, &token_id);
+            token_admin.mint(&maintainer, &1000);
+
+            let bounty_id = create_bounty_with_state(
+                &env,
+                &client,
+                maintainer.clone(),
+                contributor.clone(),
+                token_id.clone(),
+                $status,
+            );
+            let action = $action;
+            action(&client, bounty_id, maintainer, contributor);
+        }
+    };
+}
+
 #[test]
 fn test_create_bounty() {
     let env = Env::default();
@@ -84,7 +158,7 @@ fn test_create_bounty() {
 }
 
 #[test]
-#[should_panic(expected = "amount must be positive")]
+#[should_panic(expected = "InvalidAmount")]
 fn test_create_bounty_negative_amount() {
     let env = Env::default();
     env.mock_all_auths();
@@ -142,7 +216,32 @@ fn test_full_lifecycle() {
 }
 
 #[test]
-fn test_refund_flow() {
+#[should_panic(expected = "BountyNotExpiredYet")]
+fn test_refund_reserved_before_deadline_fails() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (client, maintainer, contributor, token_id) = setup_test(&env);
+    let token_admin = soroban_sdk::token::StellarAssetClient::new(&env, &token_id);
+    token_admin.mint(&maintainer, &1000);
+
+    let deadline = env.ledger().timestamp() + 1000;
+    let bounty_id = client.create_bounty(
+        &maintainer,
+        &token_id,
+        &500,
+        &String::from_str(&env, "repo"),
+        &1,
+        &String::from_str(&env, "title"),
+        &deadline,
+    );
+
+    client.reserve_bounty(&bounty_id, &contributor);
+    client.refund_bounty(&bounty_id, &maintainer);
+}
+
+#[test]
+fn test_refund_after_deadline_reserved_succeeds() {
     let env = Env::default();
     env.mock_all_auths();
 
@@ -163,9 +262,7 @@ fn test_refund_flow() {
         &0u32,
     );
 
-    env.ledger().with_mut(|li| {
-        li.timestamp = deadline + 1;
-    });
+
 
     client.refund_bounty(&bounty_id, &maintainer);
     let bounty = client.get_bounty(&bounty_id);
@@ -174,8 +271,152 @@ fn test_refund_flow() {
     assert_eq!(token.balance(&maintainer), 1000);
 }
 
+invalid_transition_test!(reserve_reserved, BountyStatus::Reserved, "BountyNotOpen", {
+    |client: &StellarBountyBoardContractClient<'static>, bounty_id: u64, _maintainer: Address, contributor: Address| {
+        client.reserve_bounty(&bounty_id, &contributor)
+    }
+});
+invalid_transition_test!(reserve_submitted, BountyStatus::Submitted, "BountyNotOpen", {
+    |client: &StellarBountyBoardContractClient<'static>, bounty_id: u64, _maintainer: Address, contributor: Address| {
+        client.reserve_bounty(&bounty_id, &contributor)
+    }
+});
+invalid_transition_test!(reserve_released, BountyStatus::Released, "BountyNotOpen", {
+    |client: &StellarBountyBoardContractClient<'static>, bounty_id: u64, _maintainer: Address, contributor: Address| {
+        client.reserve_bounty(&bounty_id, &contributor)
+    }
+});
+invalid_transition_test!(reserve_refunded, BountyStatus::Refunded, "BountyNotOpen", {
+    |client: &StellarBountyBoardContractClient<'static>, bounty_id: u64, _maintainer: Address, contributor: Address| {
+        client.reserve_bounty(&bounty_id, &contributor)
+    }
+});
+invalid_transition_test!(reserve_expired, BountyStatus::Expired, "BountyNotOpen", {
+    |client: &StellarBountyBoardContractClient<'static>, bounty_id: u64, _maintainer: Address, contributor: Address| {
+        client.reserve_bounty(&bounty_id, &contributor)
+    }
+});
+
+invalid_transition_test!(submit_open, BountyStatus::Open, "BountyMustBeReserved", {
+    |client: &StellarBountyBoardContractClient<'static>, bounty_id: u64, _maintainer: Address, contributor: Address| {
+        client.submit_bounty(&bounty_id, &contributor)
+    }
+});
+invalid_transition_test!(submit_submitted, BountyStatus::Submitted, "BountyMustBeReserved", {
+    |client: &StellarBountyBoardContractClient<'static>, bounty_id: u64, _maintainer: Address, contributor: Address| {
+        client.submit_bounty(&bounty_id, &contributor)
+    }
+});
+invalid_transition_test!(submit_released, BountyStatus::Released, "BountyMustBeReserved", {
+    |client: &StellarBountyBoardContractClient<'static>, bounty_id: u64, _maintainer: Address, contributor: Address| {
+        client.submit_bounty(&bounty_id, &contributor)
+    }
+});
+invalid_transition_test!(submit_refunded, BountyStatus::Refunded, "BountyMustBeReserved", {
+    |client: &StellarBountyBoardContractClient<'static>, bounty_id: u64, _maintainer: Address, contributor: Address| {
+        client.submit_bounty(&bounty_id, &contributor)
+    }
+});
+invalid_transition_test!(submit_expired, BountyStatus::Expired, "BountyMustBeReserved", {
+    |client: &StellarBountyBoardContractClient<'static>, bounty_id: u64, _maintainer: Address, contributor: Address| {
+        client.submit_bounty(&bounty_id, &contributor)
+    }
+});
+
+invalid_transition_test!(release_open, BountyStatus::Open, "BountyMustBeSubmitted", {
+    |client: &StellarBountyBoardContractClient<'static>, bounty_id: u64, maintainer: Address, _contributor: Address| {
+        client.release_bounty(&bounty_id, &maintainer)
+    }
+});
+invalid_transition_test!(release_reserved, BountyStatus::Reserved, "BountyMustBeSubmitted", {
+    |client: &StellarBountyBoardContractClient<'static>, bounty_id: u64, maintainer: Address, _contributor: Address| {
+        client.release_bounty(&bounty_id, &maintainer)
+    }
+});
+invalid_transition_test!(release_released, BountyStatus::Released, "BountyMustBeSubmitted", {
+    |client: &StellarBountyBoardContractClient<'static>, bounty_id: u64, maintainer: Address, _contributor: Address| {
+        client.release_bounty(&bounty_id, &maintainer)
+    }
+});
+invalid_transition_test!(release_refunded, BountyStatus::Refunded, "BountyMustBeSubmitted", {
+    |client: &StellarBountyBoardContractClient<'static>, bounty_id: u64, maintainer: Address, _contributor: Address| {
+        client.release_bounty(&bounty_id, &maintainer)
+    }
+});
+invalid_transition_test!(release_expired, BountyStatus::Expired, "BountyMustBeSubmitted", {
+    |client: &StellarBountyBoardContractClient<'static>, bounty_id: u64, maintainer: Address, _contributor: Address| {
+        client.release_bounty(&bounty_id, &maintainer)
+    }
+});
+
+invalid_transition_test!(refund_open, BountyStatus::Open, "BountyNotExpiredYet", {
+    |client: &StellarBountyBoardContractClient<'static>, bounty_id: u64, maintainer: Address, _contributor: Address| {
+        client.refund_bounty(&bounty_id, &maintainer)
+    }
+});
+invalid_transition_test!(refund_reserved, BountyStatus::Reserved, "BountyNotExpiredYet", {
+    |client: &StellarBountyBoardContractClient<'static>, bounty_id: u64, maintainer: Address, _contributor: Address| {
+        client.refund_bounty(&bounty_id, &maintainer)
+    }
+});
+invalid_transition_test!(refund_submitted, BountyStatus::Submitted, "BountyNotExpiredYet", {
+    |client: &StellarBountyBoardContractClient<'static>, bounty_id: u64, maintainer: Address, _contributor: Address| {
+        client.refund_bounty(&bounty_id, &maintainer)
+    }
+});
+invalid_transition_test!(refund_released, BountyStatus::Released, "BountyAlreadyFinalized", {
+    |client: &StellarBountyBoardContractClient<'static>, bounty_id: u64, maintainer: Address, _contributor: Address| {
+        client.refund_bounty(&bounty_id, &maintainer)
+    }
+});
+invalid_transition_test!(refund_refunded, BountyStatus::Refunded, "BountyAlreadyFinalized", {
+    |client: &StellarBountyBoardContractClient<'static>, bounty_id: u64, maintainer: Address, _contributor: Address| {
+        client.refund_bounty(&bounty_id, &maintainer)
+    }
+});
+
+invalid_transition_test!(extend_released, BountyStatus::Released, "CannotExtendFinalizedBounty", {
+    |client: &StellarBountyBoardContractClient<'static>, bounty_id: u64, maintainer: Address, _contributor: Address| {
+        client.extend_deadline(&bounty_id, &maintainer, &1000000)
+    }
+});
+invalid_transition_test!(extend_refunded, BountyStatus::Refunded, "CannotExtendFinalizedBounty", {
+    |client: &StellarBountyBoardContractClient<'static>, bounty_id: u64, maintainer: Address, _contributor: Address| {
+        client.extend_deadline(&bounty_id, &maintainer, &1000000)
+    }
+});
+invalid_transition_test!(extend_expired, BountyStatus::Expired, "CannotExtendFinalizedBounty", {
+    |client: &StellarBountyBoardContractClient<'static>, bounty_id: u64, maintainer: Address, _contributor: Address| {
+        client.extend_deadline(&bounty_id, &maintainer, &1000000)
+    }
+});
+
 #[test]
-#[should_panic(expected = "bounty must be submitted")]
+#[should_panic(expected = "BountyNotOpen")]
+fn test_concurrent_reservation_race_fails() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (client, maintainer, contributor, token_id) = setup_test(&env);
+    let token_admin = soroban_sdk::token::StellarAssetClient::new(&env, &token_id);
+    token_admin.mint(&maintainer, &1000);
+
+    let bounty_id = client.create_bounty(
+        &maintainer,
+        &token_id,
+        &500,
+        &String::from_str(&env, "repo"),
+        &1,
+        &String::from_str(&env, "title"),
+        &(env.ledger().timestamp() + 1000),
+    );
+
+    client.reserve_bounty(&bounty_id, &contributor);
+    client.reserve_bounty(&bounty_id, &contributor);
+}
+
+#[test]
+#[should_panic(expected = "BountyMustBeSubmitted")]
 fn test_release_without_submit() {
     let env = Env::default();
     env.mock_all_auths();
@@ -220,16 +461,14 @@ fn test_expiration() {
         &0u32,
     );
 
-    env.ledger().with_mut(|li| {
-        li.timestamp = deadline + 1;
-    });
+
 
     let bounty = client.get_bounty(&bounty_id);
     assert_eq!(bounty.status, BountyStatus::Expired);
 }
 
 #[test]
-#[should_panic(expected = "bounty is not open")]
+#[should_panic(expected = "BountyNotOpen")]
 fn test_reserve_expired_bounty() {
     let env = Env::default();
     env.mock_all_auths();
@@ -250,9 +489,7 @@ fn test_reserve_expired_bounty() {
         &0u32,
     );
 
-    env.ledger().with_mut(|li| {
-        li.timestamp = deadline + 1;
-    });
+
 
     client.reserve_bounty(&bounty_id, &contributor);
 }
@@ -297,7 +534,7 @@ fn test_extend_deadline_success() {
 }
 
 #[test]
-#[should_panic(expected = "maintainer mismatch")]
+#[should_panic(expected = "MaintainerMismatch")]
 fn test_extend_deadline_wrong_caller() {
     let env = Env::default();
     env.mock_all_auths();
@@ -324,7 +561,7 @@ fn test_extend_deadline_wrong_caller() {
 }
 
 #[test]
-#[should_panic(expected = "new deadline must be greater than current deadline")]
+#[should_panic(expected = "DeadlineMustAdvance")]
 fn test_extend_deadline_earlier() {
     let env = Env::default();
     env.mock_all_auths();
