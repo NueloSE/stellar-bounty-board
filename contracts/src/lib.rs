@@ -83,6 +83,13 @@ pub struct BountyRefunded {
     pub amount: i128,
 }
 
+#[contracttype]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BountyDeadlineExtended {
+    pub bounty_id: u64,
+    pub new_deadline: u64,
+}
+
 #[contract]
 pub struct StellarBountyBoardContract;
 
@@ -322,6 +329,30 @@ impl StellarBountyBoardContract {
                 bounty_id,
                 maintainer,
                 amount: bounty.amount,
+            },
+        );
+    }
+
+    pub fn extend_deadline(env: Env, bounty_id: u64, maintainer: Address, new_deadline: u64) {
+        maintainer.require_auth();
+        let mut bounty = read_bounty(&env, bounty_id);
+
+        if bounty.maintainer != maintainer {
+            panic!("maintainer mismatch");
+        }
+
+        if new_deadline <= bounty.deadline {
+            panic!("new deadline must be greater than current deadline");
+        }
+
+        bounty.deadline = new_deadline;
+        write_bounty(&env, bounty_id, &bounty);
+
+        env.events().publish(
+            (symbol_short!("Bounty"), symbol_short!("Extnd")),
+            BountyDeadlineExtended {
+                bounty_id,
+                new_deadline,
             },
         );
     }

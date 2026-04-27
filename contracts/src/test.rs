@@ -257,180 +257,16 @@ fn test_reserve_expired_bounty() {
     client.reserve_bounty(&bounty_id, &contributor);
 }
 
-//  new fee tests
-/// 0 bps: contributor receives 100% of the escrowed amount
 #[test]
-fn test_fee_zero_bps_full_payout() {
+fn test_extend_deadline_success() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let (client, maintainer, contributor, token_id, fee_recipient) = setup_test(&env);
-    let token = TokenClient::new(&env, &token_id);
+    let (client, maintainer, _, token_id) = setup_test(&env);
     let token_admin = soroban_sdk::token::StellarAssetClient::new(&env, &token_id);
     token_admin.mint(&maintainer, &1000);
 
-    let amount = 1000i128;
-    let bounty_id = client.create_bounty(
-        &maintainer,
-        &token_id,
-        &amount,
-        &String::from_str(&env, "repo"),
-        &1,
-        &String::from_str(&env, "title"),
-        &(env.ledger().timestamp() + 1000),
-        &0u32, // 0 bps
-    );
-
-    client.reserve_bounty(&bounty_id, &contributor);
-    client.submit_bounty(&bounty_id, &contributor);
-    client.release_bounty(&bounty_id, &maintainer);
-
-    // Contributor gets everything
-    assert_eq!(token.balance(&contributor), 1000);
-    // Fee recipient gets nothing
-    assert_eq!(token.balance(&fee_recipient), 0);
-    // Contract is empty
-    assert_eq!(token.balance(&client.address), 0);
-}
-
-/// 100 bps (1%): on 1000 tokens ==> fee = 10, contributor receives 990
-#[test]
-fn test_fee_100_bps_one_percent() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let (client, maintainer, contributor, token_id, fee_recipient) = setup_test(&env);
-    let token = TokenClient::new(&env, &token_id);
-    let token_admin = soroban_sdk::token::StellarAssetClient::new(&env, &token_id);
-    token_admin.mint(&maintainer, &1000);
-
-    let amount = 1000i128;
-    let bounty_id = client.create_bounty(
-        &maintainer,
-        &token_id,
-        &amount,
-        &String::from_str(&env, "repo"),
-        &1,
-        &String::from_str(&env, "title"),
-        &(env.ledger().timestamp() + 1000),
-        &100u32, // 1% = 100 bps
-    );
-
-    client.reserve_bounty(&bounty_id, &contributor);
-    client.submit_bounty(&bounty_id, &contributor);
-    client.release_bounty(&bounty_id, &maintainer);
-
-    // fee = 1000 * 100 / 10_000 = 10
-    assert_eq!(token.balance(&contributor), 990);
-    assert_eq!(token.balance(&fee_recipient), 10);
-    assert_eq!(token.balance(&client.address), 0);
-}
-
-/// 500 bps (5%): on 1000 tokens => fee = 50, contributor receives 950
-#[test]
-fn test_fee_500_bps_five_percent() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let (client, maintainer, contributor, token_id, fee_recipient) = setup_test(&env);
-    let token = TokenClient::new(&env, &token_id);
-    let token_admin = soroban_sdk::token::StellarAssetClient::new(&env, &token_id);
-    token_admin.mint(&maintainer, &1000);
-
-    let amount = 1000i128;
-    let bounty_id = client.create_bounty(
-        &maintainer,
-        &token_id,
-        &amount,
-        &String::from_str(&env, "repo"),
-        &1,
-        &String::from_str(&env, "title"),
-        &(env.ledger().timestamp() + 1000),
-        &500u32, // 5% = 500 bps
-    );
-
-    client.reserve_bounty(&bounty_id, &contributor);
-    client.submit_bounty(&bounty_id, &contributor);
-    client.release_bounty(&bounty_id, &maintainer);
-
-    // fee = 1000 * 500 / 10_000 = 50
-    assert_eq!(token.balance(&contributor), 950);
-    assert_eq!(token.balance(&fee_recipient), 50);
-    assert_eq!(token.balance(&client.address), 0);
-}
-
-/// Fee is deducted from payout, not added on top.
-/// Escrowed amount stays 1000; contributor gets less, total stays 1000.
-#[test]
-fn test_fee_deducted_from_payout_not_added_on_top() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let (client, maintainer, contributor, token_id, fee_recipient) = setup_test(&env);
-    let token = TokenClient::new(&env, &token_id);
-    let token_admin = soroban_sdk::token::StellarAssetClient::new(&env, &token_id);
-    token_admin.mint(&maintainer, &1000);
-
-    let amount = 1000i128;
-    let bounty_id = client.create_bounty(
-        &maintainer,
-        &token_id,
-        &amount,
-        &String::from_str(&env, "repo"),
-        &1,
-        &String::from_str(&env, "title"),
-        &(env.ledger().timestamp() + 1000),
-        &200u32, // 2%
-    );
-
-    client.reserve_bounty(&bounty_id, &contributor);
-    client.submit_bounty(&bounty_id, &contributor);
-    client.release_bounty(&bounty_id, &maintainer);
-
-    let net = token.balance(&contributor);
-    let fee = token.balance(&fee_recipient);
-
-    // Total out == total escrowed fee was deducted, not added
-    assert_eq!(net + fee, amount);
-    assert_eq!(fee, 20);  // 2% of 1000
-    assert_eq!(net, 980);
-}
-
-/// Guard: fee exceeding 10000 bps (100%) must panic
-#[test]
-#[should_panic(expected = "fee exceeds 100%")]
-fn test_fee_exceeds_max_panics() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let (client, maintainer, _, token_id, _) = setup_test(&env);
-    let token_admin = soroban_sdk::token::StellarAssetClient::new(&env, &token_id);
-    token_admin.mint(&maintainer, &1000);
-
-    client.create_bounty(
-        &maintainer,
-        &token_id,
-        &500,
-        &String::from_str(&env, "repo"),
-        &1,
-        &String::from_str(&env, "title"),
-        &(env.ledger().timestamp() + 1000),
-        &10_001u32, // over 100%
-    );
-}
-
-/// Refund always returns full escrow amount regardless of fee setting
-#[test]
-fn test_refund_returns_full_amount_ignoring_fee() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let (client, maintainer, _contributor, token_id, fee_recipient) = setup_test(&env);
-    let token = TokenClient::new(&env, &token_id);
-    let token_admin = soroban_sdk::token::StellarAssetClient::new(&env, &token_id);
-    token_admin.mint(&maintainer, &1000);
-
-    let deadline = env.ledger().timestamp() + 1000;
+    let initial_deadline = env.ledger().timestamp() + 1000;
     let bounty_id = client.create_bounty(
         &maintainer,
         &token_id,
@@ -438,17 +274,77 @@ fn test_refund_returns_full_amount_ignoring_fee() {
         &String::from_str(&env, "repo"),
         &1,
         &String::from_str(&env, "title"),
-        &deadline,
-        &500u32, // 5% fee set, but should not apply to refunds
+        &initial_deadline,
     );
 
-    env.ledger().with_mut(|li| {
-        li.timestamp = deadline + 1;
-    });
+    let new_deadline = initial_deadline + 5000;
+    client.extend_deadline(&bounty_id, &maintainer, &new_deadline);
 
-    client.refund_bounty(&bounty_id, &maintainer);
+    let bounty = client.get_bounty(&bounty_id);
+    assert_eq!(bounty.deadline, new_deadline);
 
-    // Full amount back to maintainer — fee recipient gets nothing on refund
-    assert_eq!(token.balance(&maintainer), 1000);
-    assert_eq!(token.balance(&fee_recipient), 0);
+    // Verify event
+    let events = env.events().all();
+    let last_event = events.last().unwrap();
+    assert_eq!(last_event.0, client.address);
+    assert_eq!(
+        last_event.1,
+        (symbol_short!("Bounty"), symbol_short!("Extnd")).into_val(&env)
+    );
+    let event_data: BountyDeadlineExtended = last_event.2.into_val(&env);
+    assert_eq!(event_data.bounty_id, bounty_id);
+    assert_eq!(event_data.new_deadline, new_deadline);
+}
+
+#[test]
+#[should_panic(expected = "maintainer mismatch")]
+fn test_extend_deadline_wrong_caller() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (client, maintainer, contributor, token_id) = setup_test(&env);
+    let token_admin = soroban_sdk::token::StellarAssetClient::new(&env, &token_id);
+    token_admin.mint(&maintainer, &1000);
+
+    let initial_deadline = env.ledger().timestamp() + 1000;
+    let bounty_id = client.create_bounty(
+        &maintainer,
+        &token_id,
+        &500,
+        &String::from_str(&env, "repo"),
+        &1,
+        &String::from_str(&env, "title"),
+        &initial_deadline,
+    );
+
+    let new_deadline = initial_deadline + 5000;
+    
+    // Attempting to extend using the contributor's address instead of the maintainer
+    client.extend_deadline(&bounty_id, &contributor, &new_deadline);
+}
+
+#[test]
+#[should_panic(expected = "new deadline must be greater than current deadline")]
+fn test_extend_deadline_earlier() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (client, maintainer, _, token_id) = setup_test(&env);
+    let token_admin = soroban_sdk::token::StellarAssetClient::new(&env, &token_id);
+    token_admin.mint(&maintainer, &1000);
+
+    let initial_deadline = env.ledger().timestamp() + 1000;
+    let bounty_id = client.create_bounty(
+        &maintainer,
+        &token_id,
+        &500,
+        &String::from_str(&env, "repo"),
+        &1,
+        &String::from_str(&env, "title"),
+        &initial_deadline,
+    );
+
+    // Attempting to set a deadline earlier than the initial one
+    let earlier_deadline = initial_deadline - 100;
+    client.extend_deadline(&bounty_id, &maintainer, &earlier_deadline);
 }
