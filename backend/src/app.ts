@@ -2,6 +2,8 @@ import cors from "cors";
 import express, { Request, Response, NextFunction } from "express";
 import { randomUUID } from "node:crypto";
 import { buildCorsOptions } from "./middleware/corsOptions";
+import swaggerUi from "swagger-ui-express";
+import { generateOpenApiDocument } from "./docs/openapi";
 import {
   createBounty,
   listBountyAuditLogs,
@@ -31,6 +33,8 @@ import {
 } from "./webhooks/signatureVerification";
 
 const INCOMING_REQUEST_ID = /^[a-zA-Z0-9-]{1,128}$/;
+
+
 
 function resolveRequestId(req: Request): string {
   const raw = req.headers["x-request-id"];
@@ -77,6 +81,8 @@ app.use(
 );
 app.use(requestContextMiddleware);
 
+const swaggerDoc = generateOpenApiDocument();
+app.use("/api/docs", swaggerUi.serve, swaggerUi.setup(swaggerDoc));
 
 function parseId(raw: string | string[] | undefined): string {
   return bountyIdSchema.parse(Array.isArray(raw) ? raw[0] : raw);
@@ -368,7 +374,7 @@ app.get("/api/metrics", (_req: Request, res: Response) => {
     const metrics = getGlobalMetrics();
     res.json({ data: metrics });
   } catch (error) {
-    sendError(res, req, error);
+    sendError(res, _req, error)
   }
 });
 
