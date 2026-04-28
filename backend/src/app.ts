@@ -2,6 +2,7 @@ import cors from "cors";
 import express, { Request, Response, NextFunction } from "express";
 import { randomUUID } from "node:crypto";
 import { buildCorsOptions } from "./middleware/corsOptions";
+
 import {
   createBounty,
   listBountyAuditLogs,
@@ -31,6 +32,8 @@ import {
 } from "./webhooks/signatureVerification";
 
 const INCOMING_REQUEST_ID = /^[a-zA-Z0-9-]{1,128}$/;
+
+
 
 function resolveRequestId(req: Request): string {
   const raw = req.headers["x-request-id"];
@@ -77,6 +80,8 @@ app.use(
 );
 app.use(requestContextMiddleware);
 
+const swaggerDoc = generateOpenApiDocument();
+app.use("/api/docs", swaggerUi.serve, swaggerUi.setup(swaggerDoc));
 
 function parseId(raw: string | string[] | undefined): string {
   return bountyIdSchema.parse(Array.isArray(raw) ? raw[0] : raw);
@@ -218,7 +223,7 @@ app.get("/api/bounties/released/export.csv", (req: Request, res: Response) => {
   }
 });
 
-app.post("/api/bounties", limiter, (req: Request, res: Response) => {
+app.post("/api/bounties", limiter, async (req: Request, res: Response) => {
   const parsed = createBountySchema.safeParse(req.body);
   if (!parsed.success) {
     jsonError(res, req, 400, zodErrorMessage(parsed.error));
@@ -226,14 +231,14 @@ app.post("/api/bounties", limiter, (req: Request, res: Response) => {
   }
 
   try {
-    const bounty = createBounty(parsed.data);
+    const bounty = await createBounty(parsed.data);
     res.status(201).json({ data: bounty });
   } catch (error) {
     sendError(res, req, error);
   }
 });
 
-app.post("/api/bounties/:id/reserve", limiter, (req: Request, res: Response) => {
+app.post("/api/bounties/:id/reserve", limiter, async (req: Request, res: Response) => {
   const parsedBody = reserveBountySchema.safeParse(req.body);
   if (!parsedBody.success) {
     jsonError(res, req, 400, zodErrorMessage(parsedBody.error));
@@ -241,14 +246,14 @@ app.post("/api/bounties/:id/reserve", limiter, (req: Request, res: Response) => 
   }
 
   try {
-    const bounty = reserveBounty(parseId(req.params.id), parsedBody.data.contributor, parsedBody.data.expectedVersion);
+    const bounty = await reserveBounty(parseId(req.params.id), parsedBody.data.contributor, parsedBody.data.expectedVersion);
     res.json({ data: bounty });
   } catch (error) {
     sendError(res, req, error);
   }
 });
 
-app.post("/api/bounties/:id/submit", limiter, (req: Request, res: Response) => {
+app.post("/api/bounties/:id/submit", limiter, async (req: Request, res: Response) => {
   const parsedBody = submitBountySchema.safeParse(req.body);
   if (!parsedBody.success) {
     jsonError(res, req, 400, zodErrorMessage(parsedBody.error));
@@ -256,7 +261,7 @@ app.post("/api/bounties/:id/submit", limiter, (req: Request, res: Response) => {
   }
 
   try {
-    const bounty = submitBounty(
+    const bounty = await submitBounty(
       parseId(req.params.id),
       parsedBody.data.contributor,
       parsedBody.data.submissionUrl,
@@ -268,7 +273,7 @@ app.post("/api/bounties/:id/submit", limiter, (req: Request, res: Response) => {
   }
 });
 
-app.post("/api/bounties/:id/release", limiter, (req: Request, res: Response) => {
+
   const parsedBody = maintainerActionSchema.safeParse(req.body);
   if (!parsedBody.success) {
     jsonError(res, req, 400, zodErrorMessage(parsedBody.error));
@@ -276,7 +281,7 @@ app.post("/api/bounties/:id/release", limiter, (req: Request, res: Response) => 
   }
 
   try {
-    const bounty = releaseBounty(
+    const bounty = await releaseBounty(
       parseId(req.params.id),
       parsedBody.data.maintainer,
       parsedBody.data.transactionHash,
@@ -287,7 +292,7 @@ app.post("/api/bounties/:id/release", limiter, (req: Request, res: Response) => 
   }
 });
 
-app.post("/api/bounties/:id/refund", limiter, (req: Request, res: Response) => {
+
   const parsedBody = maintainerActionSchema.safeParse(req.body);
   if (!parsedBody.success) {
     jsonError(res, req, 400, zodErrorMessage(parsedBody.error));
@@ -295,7 +300,7 @@ app.post("/api/bounties/:id/refund", limiter, (req: Request, res: Response) => {
   }
 
   try {
-    const bounty = refundBounty(
+    const bounty = await refundBounty(
       parseId(req.params.id),
       parsedBody.data.maintainer,
       parsedBody.data.transactionHash,
@@ -368,6 +373,6 @@ app.get("/api/metrics", (_req: Request, res: Response) => {
     const metrics = getGlobalMetrics();
     res.json({ data: metrics });
   } catch (error) {
-    sendError(res, _req, error);
+
   }
 });
